@@ -1,32 +1,27 @@
-From 2a24c62ef00d1b08974bd8f07e277695ac2911fa Mon Sep 17 00:00:00 2001
+From ae7c891dce5156f61e5e726e66430db923ef3dd7 Mon Sep 17 00:00:00 2001
 From: Yong Gan <b45748@freescale.com>
-Date: Thu, 22 May 2014 15:26:31 +0800
-Subject: [PATCH 2/3] ENGR00314805-2 Add Vivante GAL2D support
+Date: Wed, 27 Aug 2014 18:24:27 +0800
+Subject: [PATCH 1/2] Add Vivante EGL and GAL2D compositor support.
 
-Add Vivante GAL2D compositor support.
-
-Upstream-Status: Pending
-
-[DATE]05-22-2014
+[DATE]08-27-2014
 Signed-off-by Yong Gan <B45748@freescale.com>
 ---
  Makefile.am            |   13 +
- src/compositor-fbdev.c |  110 ++++-
- src/gal2d-renderer.c   | 1187 ++++++++++++++++++++++++++++++++++++++++++++++++
- src/gal2d-renderer.h   |   41 ++
- 4 files changed, 1337 insertions(+), 14 deletions(-)
+ src/compositor-fbdev.c |  139 +++++-
+ src/gal2d-renderer.c   | 1231 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/gal2d-renderer.h   |   47 ++
+ 4 files changed, 1414 insertions(+), 16 deletions(-)
  create mode 100644 src/gal2d-renderer.c
  create mode 100644 src/gal2d-renderer.h
 
 diff --git a/Makefile.am b/Makefile.am
-index 343adc6..2bccfe9 100644
+index b2d6893..bf8fe33 100644
 --- a/Makefile.am
 +++ b/Makefile.am
-@@ -162,6 +162,19 @@ gl_renderer_la_SOURCES =			\
- 	src/gl-renderer.c			\
- 	src/vertex-clipping.c			\
+@@ -167,6 +167,19 @@ gl_renderer_la_SOURCES =			\
  	src/vertex-clipping.h
-+
+ endif
+ 
 +module_LTLIBRARIES += gal2d-renderer.la
 +gal2d_renderer_la_LDFLAGS = -module -avoid-version
 +gal2d_renderer_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS)
@@ -39,11 +34,12 @@ index 343adc6..2bccfe9 100644
 +	src/gal2d-renderer.c			\
 +	src/vertex-clipping.c			\
 +	src/vertex-clipping.h
- endif
- 
++
  if ENABLE_X11_COMPOSITOR
+ module_LTLIBRARIES += x11-backend.la
+ x11_backend_la_LDFLAGS = -module -avoid-version
 diff --git a/src/compositor-fbdev.c b/src/compositor-fbdev.c
-index 3db1d17..a3d32e5 100644
+index e703e0e..3ae580b 100644
 --- a/src/compositor-fbdev.c
 +++ b/src/compositor-fbdev.c
 @@ -44,6 +44,7 @@
@@ -54,15 +50,26 @@ index 3db1d17..a3d32e5 100644
  
  struct fbdev_compositor {
  	struct weston_compositor base;
-@@ -52,6 +53,7 @@ struct fbdev_compositor {
+@@ -52,7 +53,9 @@ struct fbdev_compositor {
  	struct udev *udev;
  	struct udev_input input;
  	int use_pixman;
 +	int use_gal2d;
  	struct wl_listener session_listener;
- 	EGLNativeDisplayType display;
++	NativeDisplayType display;
  };
-@@ -97,9 +99,11 @@ struct fbdev_parameters {
+ 
+ struct fbdev_screeninfo {
+@@ -87,15 +90,20 @@ struct fbdev_output {
+ 	pixman_image_t *shadow_surface;
+ 	void *shadow_buf;
+ 	uint8_t depth;
++
++	NativeDisplayType display;
++	NativeWindowType  window;
+ };
+ 
+ struct fbdev_parameters {
  	int tty;
  	char *device;
  	int use_gl;
@@ -74,7 +81,18 @@ index 3db1d17..a3d32e5 100644
  
  static const char default_seat[] = "seat0";
  
-@@ -502,7 +506,7 @@ static void fbdev_output_disable(struct weston_output *base);
+@@ -491,6 +499,10 @@ fbdev_frame_buffer_destroy(struct fbdev_output *output)
+ 		           strerror(errno));
+ 
+ 	output->fb = NULL;
++	if(output->window)
++		fbDestroyWindow(output->window);
++	if(output->display)
++		fbDestroyDisplay(output->display);
+ }
+ 
+ static void fbdev_output_destroy(struct weston_output *base);
+@@ -498,7 +510,7 @@ static void fbdev_output_disable(struct weston_output *base);
  
  static int
  fbdev_output_create(struct fbdev_compositor *compositor,
@@ -83,7 +101,7 @@ index 3db1d17..a3d32e5 100644
  {
  	struct fbdev_output *output;
  	pixman_transform_t transform;
-@@ -512,7 +516,8 @@ fbdev_output_create(struct fbdev_compositor *compositor,
+@@ -508,7 +520,8 @@ fbdev_output_create(struct fbdev_compositor *compositor,
  	unsigned int bytes_per_pixel;
  	struct wl_event_loop *loop;
  
@@ -93,7 +111,7 @@ index 3db1d17..a3d32e5 100644
  
  	output = calloc(1, sizeof *output);
  	if (!output)
-@@ -559,7 +564,7 @@ fbdev_output_create(struct fbdev_compositor *compositor,
+@@ -555,7 +568,7 @@ fbdev_output_create(struct fbdev_compositor *compositor,
  	output->base.model = output->fb_info.id;
  
  	weston_output_init(&output->base, &compositor->base,
@@ -102,13 +120,12 @@ index 3db1d17..a3d32e5 100644
  	                   output->fb_info.height_mm,
  	                   WL_OUTPUT_TRANSFORM_NORMAL,
  			   1);
-@@ -629,8 +634,33 @@ fbdev_output_create(struct fbdev_compositor *compositor,
+@@ -625,12 +638,43 @@ fbdev_output_create(struct fbdev_compositor *compositor,
  	if (compositor->use_pixman) {
  		if (pixman_renderer_output_create(&output->base) < 0)
  			goto out_shadow_surface;
 -	} else {
--		setenv("HYBRIS_EGLPLATFORM", "wayland", 1);
-+	} 
++	}
 +	else if(compositor->use_gal2d) {
 +
 +		char* fbenv = getenv("FB_FRAMEBUFFER_0");
@@ -135,10 +152,23 @@ index 3db1d17..a3d32e5 100644
 +
 +	}
 +	else {
- 		output->window = fbCreateWindow(compositor->display, -1, -1, 0, 0);
- 		if (output->window == NULL) {
- 			fprintf(stderr, "failed to create window\n");
-@@ -698,7 +728,11 @@ fbdev_output_destroy(struct weston_output *base)
+ 		setenv("HYBRIS_EGLPLATFORM", "wayland", 1);
++		output->window = fbCreateWindow(compositor->display, -1, -1, 0, 0);
++		if (output->window == NULL) {
++			fprintf(stderr, "failed to create window\n");
++			return 0;
++		}
+ 		if (gl_renderer->output_create(&output->base,
+-					       (EGLNativeWindowType)NULL,
+-					       gl_renderer->opaque_attribs,
+-					       NULL) < 0) {
++						(NativeWindowType)output->window,
++						gl_renderer->opaque_attribs,
++						NULL) < 0) {
+ 			weston_log("gl_renderer_output_create failed.\n");
+ 			goto out_shadow_surface;
+ 		}
+@@ -689,7 +733,11 @@ fbdev_output_destroy(struct weston_output *base)
  			free(output->shadow_buf);
  			output->shadow_buf = NULL;
  		}
@@ -151,7 +181,7 @@ index 3db1d17..a3d32e5 100644
  		gl_renderer->output_destroy(base);
  	}
  
-@@ -761,7 +795,7 @@ fbdev_output_reenable(struct fbdev_compositor *compositor,
+@@ -752,7 +800,7 @@ fbdev_output_reenable(struct fbdev_compositor *compositor,
  		 * are re-initialised. */
  		device = output->device;
  		fbdev_output_destroy(base);
@@ -160,7 +190,7 @@ index 3db1d17..a3d32e5 100644
  
  		return 0;
  	}
-@@ -914,7 +948,10 @@ fbdev_compositor_create(struct wl_display *display, int *argc, char *argv[],
+@@ -905,7 +953,10 @@ fbdev_compositor_create(struct wl_display *display, int *argc, char *argv[],
  	compositor->base.restore = fbdev_restore;
  
  	compositor->prev_state = WESTON_COMPOSITOR_ACTIVE;
@@ -172,7 +202,7 @@ index 3db1d17..a3d32e5 100644
  
  	for (key = KEY_F1; key < KEY_F9; key++)
  		weston_compositor_add_key_binding(&compositor->base, key,
-@@ -924,7 +961,50 @@ fbdev_compositor_create(struct wl_display *display, int *argc, char *argv[],
+@@ -915,7 +966,50 @@ fbdev_compositor_create(struct wl_display *display, int *argc, char *argv[],
  	if (compositor->use_pixman) {
  		if (pixman_renderer_init(&compositor->base) < 0)
  			goto out_launcher;
@@ -224,7 +254,21 @@ index 3db1d17..a3d32e5 100644
  		gl_renderer = weston_load_module("gl-renderer.so",
  						 "gl_renderer_interface");
  		if (!gl_renderer) {
-@@ -945,9 +1025,9 @@ fbdev_compositor_create(struct wl_display *display, int *argc, char *argv[],
+@@ -923,16 +1017,22 @@ fbdev_compositor_create(struct wl_display *display, int *argc, char *argv[],
+ 			goto out_launcher;
+ 		}
+ 
+-		if (gl_renderer->create(&compositor->base, EGL_DEFAULT_DISPLAY,
++		compositor->display = fbGetDisplay(compositor->base.wl_display);
++		if (compositor->display == NULL) {
++			weston_log("fbGetDisplay failed.\n");
++			goto out_launcher;
++		}
++
++		if (gl_renderer->create(&compositor->base, compositor->display,
+ 					gl_renderer->opaque_attribs,
+ 					NULL) < 0) {
+ 			weston_log("gl_renderer_create failed.\n");
  			goto out_launcher;
  		}
  	}
@@ -237,13 +281,17 @@ index 3db1d17..a3d32e5 100644
  
  	udev_input_init(&compositor->input, &compositor->base, compositor->udev, seat_id);
  
-@@ -980,13 +1060,15 @@ backend_init(struct wl_display *display, int *argc, char *argv[],
+@@ -965,13 +1065,20 @@ backend_init(struct wl_display *display, int *argc, char *argv[],
  	struct fbdev_parameters param = {
  		.tty = 0, /* default to current tty */
  		.device = "/dev/fb0", /* default frame buffer */
--		.use_gl = 0,
++#ifdef ENABLE_EGL
 +		.use_gl = 1,
 +		.use_gal2d = 0,
++#else
+ 		.use_gl = 0,
++		.use_gal2d = 1,
++#endif
  	};
  
  	const struct weston_option fbdev_options[] = {
@@ -257,10 +305,10 @@ index 3db1d17..a3d32e5 100644
  	parse_options(fbdev_options, ARRAY_LENGTH(fbdev_options), argc, argv);
 diff --git a/src/gal2d-renderer.c b/src/gal2d-renderer.c
 new file mode 100644
-index 0000000..c651573
+index 0000000..5142f72
 --- /dev/null
 +++ b/src/gal2d-renderer.c
-@@ -0,0 +1,1187 @@
+@@ -0,0 +1,1231 @@
 +/*
 + * Copyright (c) 2014 Freescale Semiconductor, Inc.
 + * Copyright © 2012 Intel Corporation
@@ -305,7 +353,7 @@ index 0000000..c651573
 +	
 +	int current_buffer;
 +	pixman_region32_t buffer_damage[2];
-+	EGLNativeDisplayType display;
++	NativeDisplayType display;
 +    gcoSURF* renderSurf;
 +	gctUINT32 nNumBuffers;
 +	int activebuffer;
@@ -686,11 +734,9 @@ index 0000000..c651573
 +	gcoSURF surface = gs->gco_Surface;	
 +    struct weston_buffer *buffer = gs->buffer_ref.buffer;
 +	gcePOOL pool = gcvPOOL_DEFAULT;
-+	gctUINT64 node = 0;
-+	gctUINT bytes;
-+
-+	gcmVERIFY_OK(gcoSURF_QueryVidMemNode(surface, &node,
-+						&pool, &bytes));
++    
++	gcmVERIFY_OK(gcoSURF_QueryVidMemNode(surface, gcvNULL,
++						&pool, gcvNULL));
 +
 +	if(pool != gcvPOOL_USER)
 +	{
@@ -1050,7 +1096,7 @@ index 0000000..c651573
 +
 +    pixman_region32_init(&repaint);
 +	pixman_region32_intersect(&repaint,
-+				  &ev->transform.boundingbox, damage);
++				  &ev->transform.masked_boundingbox, damage);
 +	pixman_region32_subtract(&repaint, &repaint, &ev->clip);
 +
 +	if (!pixman_region32_not_empty(&repaint))
@@ -1064,24 +1110,26 @@ index 0000000..c651573
 +				  ev->surface->width, ev->surface->height);
 +	pixman_region32_subtract(&surface_blend, &surface_blend, &ev->surface->opaque);
 +
++    struct gal2d_renderer *gr = get_renderer(ec);
++    
 +	if (pixman_region32_not_empty(&ev->surface->opaque)) {
 +
 +		repaint_region(ev, output, go, &repaint, &ev->surface->opaque);
 +	}
 +
 +	if (pixman_region32_not_empty(&surface_blend)) {
-+        struct gal2d_renderer *gr = get_renderer(ec);
-+        
++    
 +        gco2D_EnableAlphaBlend(gr->gcoEngine2d,
-+			ev->alpha * 0xFF, ev->alpha * 0xFF,
-+			gcvSURF_PIXEL_ALPHA_STRAIGHT, gcvSURF_PIXEL_ALPHA_STRAIGHT,
-+			gcvSURF_GLOBAL_ALPHA_OFF, gcvSURF_GLOBAL_ALPHA_OFF,
-+			gcvSURF_BLEND_ONE, gcvSURF_BLEND_INVERSED,
-+			gcvSURF_COLOR_STRAIGHT, gcvSURF_COLOR_STRAIGHT);
++            ev->alpha * 0xFF, ev->alpha * 0xFF,
++            gcvSURF_PIXEL_ALPHA_STRAIGHT, gcvSURF_PIXEL_ALPHA_STRAIGHT,
++            gcvSURF_GLOBAL_ALPHA_SCALE, gcvSURF_GLOBAL_ALPHA_SCALE,
++            gcvSURF_BLEND_STRAIGHT, gcvSURF_BLEND_INVERSED,
++            gcvSURF_COLOR_STRAIGHT, gcvSURF_COLOR_STRAIGHT);
 +            
 +		repaint_region(ev, output, go, &repaint, &surface_blend);
 +	}
 +
++    gco2D_DisableAlphaBlend(gr->gcoEngine2d);
 +	pixman_region32_fini(&surface_blend);
 +
 +out:
@@ -1129,6 +1177,48 @@ index 0000000..c651573
 +}
 +
 +static void
++gal2d_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer)
++{
++    gcsWL_VIV_BUFFER *vivBuffer = wl_resource_get_user_data(buffer->resource);
++    gctUINT width = 0;
++    gctUINT height = 0;
++    gctINT stride = 0;
++    gceSURF_FORMAT format;
++    gcoSURF srcSurf = vivBuffer->surface;
++    gctUINT32 physical;
++    gctPOINTER va =0;
++    gceSTATUS status = gcvSTATUS_OK;
++    struct gal2d_surface_state *gs = get_surface_state(es);
++        
++    if(gs->gco_Surface == gcvNULL)
++    {
++        /** Construct a wrapper. */
++        gcmONERROR(gcoSURF_ConstructWrapper(gcvNULL, &gs->gco_Surface));
++    }
++
++    gcmONERROR(gcoSURF_GetAlignedSize(srcSurf, &width, &height, &stride));
++    gcmONERROR(gcoSURF_GetFormat(srcSurf, gcvNULL, &format));
++    gcmONERROR(gcoSURF_Lock(srcSurf, &physical, (gctPOINTER *)&va));  
++
++    /* Set the buffer. */
++    gcmONERROR(gcoSURF_SetBuffer(gs->gco_Surface,
++                               gcvSURF_BITMAP_NO_VIDMEM,
++                               format,
++                               stride,
++                               (gctPOINTER) va,
++                               (gctUINT32) physical));
++
++    /* Set the window. */
++    gcmONERROR(gcoSURF_SetWindow(gs->gco_Surface, 0, 0, width, height));
++    
++    buffer->width = vivBuffer->width;
++    buffer->height = vivBuffer->height;
++    
++  OnError:
++    galONERROR(status);
++}
++
++static void
 +gal2d_renderer_flush_damage(struct weston_surface *surface)
 +{
 +	struct gal2d_surface_state *gs = get_surface_state(surface);
@@ -1163,10 +1253,7 @@ index 0000000..c651573
 +		gal2dBindBuffer(surface);
 +	}
 +	else
-+	{
-+		gcsWL_VIV_BUFFER *vivBuffer = (gcsWL_VIV_BUFFER *)buffer;
-+		gs->gco_Surface = vivBuffer->surface;
-+	}
++        gal2d_renderer_attach_egl(surface, buffer);
 +
 +done:
 +	pixman_region32_fini(&gs->texture_damage);
@@ -1200,19 +1287,17 @@ index 0000000..c651573
 +		}
 +	}
 +	else
-+	{
-+		gcsWL_VIV_BUFFER *vivBuffer = wl_resource_get_user_data(buffer->resource);
-+		gs->gco_Surface = vivBuffer->surface;
-+
-+		buffer->width = vivBuffer->width;
-+		buffer->height = vivBuffer->height;
-+	}
++		gal2d_renderer_attach_egl(es, buffer);
 +}
 +
 +static void
 +surface_state_destroy(struct gal2d_surface_state *gs, struct gal2d_renderer *gr)
 +{
-+	wl_list_remove(&gs->surface_destroy_listener.link);
++	if(gs->gco_Surface)
++    {
++        gcoSURF_Destroy(gs->gco_Surface);
++    }
++    wl_list_remove(&gs->surface_destroy_listener.link);
 +	wl_list_remove(&gs->renderer_destroy_listener.link);
 +	if(gs->surface)
 +		gs->surface->renderer_state = NULL;
@@ -1306,8 +1391,12 @@ index 0000000..c651573
 +{
 +    struct gal2d_output_state *go = get_output_state(output);
 +    gctUINT32 i;
-+    
-+	if(go->nNumBuffers <= 1 )
++
++    for (i = 0; i < 2; i++)
++    {
++        pixman_region32_fini(&go->buffer_damage[i]);
++    }
++    if(go->nNumBuffers <= 1 )
 +	{
 +		if(go->offscreenSurface)
 +			gcmVERIFY_OK(gcoSURF_Destroy(go->offscreenSurface));
@@ -1370,8 +1459,8 @@ index 0000000..c651573
 +}
 +
 +static int
-+gal2d_renderer_output_create(struct weston_output *output, EGLNativeDisplayType display,
-+				    EGLNativeWindowType window)
++gal2d_renderer_output_create(struct weston_output *output, NativeDisplayType display,
++				    NativeWindowType window)
 +
 + {
 +    struct gal2d_renderer *gr = get_renderer(output->compositor);
@@ -1437,6 +1526,9 @@ index 0000000..c651573
 +		gal2d_clear(output);
 +		gal2d_flip_surface(output);
 +	}
++
++	for (i = 0; i < 2; i++)
++		pixman_region32_init(&go->buffer_damage[i]);
 +OnError:
 +    galONERROR(status);
 +    /* Return the status. */
@@ -1450,10 +1542,10 @@ index 0000000..c651573
 +};
 diff --git a/src/gal2d-renderer.h b/src/gal2d-renderer.h
 new file mode 100644
-index 0000000..3b89f73
+index 0000000..1322a7d
 --- /dev/null
 +++ b/src/gal2d-renderer.h
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,47 @@
 +/*
 + * Copyright (c) 2014 Freescale Semiconductor, Inc.
 + * Copyright © 2013 Vasily Khoruzhick <anarsoul@gmail.com>
@@ -1480,7 +1572,13 @@ index 0000000..3b89f73
 +#define __gal_2d_renderer_h_
 +
 +#include  "compositor.h"
++#ifdef ENABLE_EGL
 +#include <EGL/egl.h>
++#else
++#include <HAL/gc_hal_eglplatform.h>
++typedef HALNativeDisplayType NativeDisplayType;
++typedef HALNativeWindowType  NativeWindowType;
++#endif
 +
 +
 +struct gal2d_renderer_interface {
