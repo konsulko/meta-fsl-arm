@@ -1,0 +1,11 @@
+[Unit]
+Description=Allow all users to play video with GStreamer
+Before=display-manager-run.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/bin/chmod 666 /dev/mxc_vpu
+
+[Install]
+WantedBy=graphical.target
