@@ -1,0 +1,11 @@
+[Unit]
+Description=Enable network eth0
+
+[Service]
+Type=oneshot
+User=root
+ExecStartPre=/sbin/ifconfig eth0 up
+ExecStart=/sbin/udhcpc eth0
+
+[Install]
+WantedBy=multi-user.target
