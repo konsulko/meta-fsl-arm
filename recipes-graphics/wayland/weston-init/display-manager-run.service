@@ -1,0 +1,14 @@
+[Unit]
+Description=Weston display daemon
+After=multi-user.target
+
+[Service]
+User=root
+EnvironmentFile=-/etc/sysconfig/weston
+#Set idle-time to 0 to disable Weston "inactive" mode
+ExecStart=/usr/bin/weston --tty=1 --use-gl=0 --use-gal2d=1 --idle-time=0
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
