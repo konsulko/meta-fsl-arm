@@ -5,13 +5,16 @@ PACKAGE_ARCH_mx6 = "${MACHINE_SOCARCH}"
 
 FILESEXTRAPATHS_prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "file://pulseaudio.service"
+SRC_URI_append = " file://pulseaudio.service"
+
+inherit systemd
+
+SYSTEMD_PACKAGES = "${PN}"
+SYSTEMD_SERVICE_${PN} = "pulseaudio.service"
 
 do_install_append() {
- install -p -D ${WORKDIR}/pulseaudio.service ${D}${systemd_unitdir}/system/pulseaudio.service
- mkdir -p ${D}${systemd_unitdir}/system/multi-user.target.wants
- ln -sf ../pulseaudio.service ${D}${systemd_unitdir}/system/multi-user.target.wants/pulseaudio.service
+ if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
+  install -p -D ${WORKDIR}/pulseaudio.service ${D}${systemd_unitdir}/system/pulseaudio.service
+ fi
 }
 
-FILES_${PN} += "${systemd_unitdir}/system/pulseaudio.service"
-FILES_${PN} += "${systemd_unitdir}/system/multi-user.target.wants/pulseaudio.service"
