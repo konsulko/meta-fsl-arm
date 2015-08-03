@@ -11,10 +11,15 @@ LIC_FILES_CHKSUM ??= "file://${COMMON_LICENSE_DIR}/Apache-2.0;md5=89aea4e17d99a7
 SRC_URI = ""
 SRC_URI += "file://network.service"
 
+inherit systemd
+
 BBCLASSEXTEND += " native "
 
 DEPENDS = ""
 RDEPENDS = ""
+
+SYSTEMD_PACKAGES = "${PN}"
+SYSTEMD_SERVICE_${PN} = "network.service"
 
 do_prep() {
  cd ${S}
@@ -28,11 +33,8 @@ do_compile() {
 }
 
 do_install() {
- install -p -D ${WORKDIR}/network.service ${D}${systemd_unitdir}/system/network.service
- mkdir -p ${D}${systemd_unitdir}/system/multi-user.target.wants
- ln -sf ../network.service ${D}${systemd_unitdir}/system/multi-user.target.wants/network.service
+ if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
+  install -p -D ${WORKDIR}/network.service ${D}${systemd_unitdir}/system/network.service
+ fi
 }
 
-FILES_${PN} = ""
-FILES_${PN} += "${systemd_unitdir}/system/network.service"
-FILES_${PN} += "${systemd_unitdir}/system/multi-user.target.wants/network.service"
