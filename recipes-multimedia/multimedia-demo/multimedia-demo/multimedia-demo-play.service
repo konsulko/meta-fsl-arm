@@ -1,0 +1,13 @@
+[Unit]
+Description=Play multimedia
+After=multi-user.target display-manager-run.service multimedia-demo-copy.service
+Requires=display-manager-run.service multimedia-demo-copy.service
+
+[Service]
+User=root
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/local/sbin/multimedia-demo-play.sh
+
+[Install]
+WantedBy=multi-user.target
+
