@@ -1,0 +1,10 @@
+[Unit]
+Description=Copy multimedia
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/multimedia-demo-copy.sh
+
+[Install]
+WantedBy=multi-user.target
