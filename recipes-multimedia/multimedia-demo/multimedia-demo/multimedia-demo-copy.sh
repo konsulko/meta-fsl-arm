@@ -34,17 +34,29 @@ do
 			umount /dev/$devicePartition
 			continue
 		fi
+
+		#check if file is the same at the existing in the home directory
+		if [ -f $configPath$configFile ]; then
+			checksumMnt=`md5sum /mnt/$configFile | awk '{ print $1 }`
+			checksumHome=`md5sum $configPath$configFile | awk '{ print $1 }`
+			if [ "$checksumMnt" = "$checksumHome" ]; then
+				echo "Files are identical. Skipping..."
+				continue
+			fi
+		fi
+
 		echo "Coping file $configFile. Please wait..."
 		mkdir -p $configPath
 		cp /mnt/$configFile $configPath
 		copyStatus=$?
 		if [ $copyStatus -eq 0 ]; then
-			echo "File $configFile copied to directory $configPath"	
+			echo "File $configFile copied to directory $configPath"
+			umount /dev/$devicePartition
 			break
 		else
 			echo "Error: unable to copy file $configFile"
+			umount /dev/$devicePartition
 		fi
-		umount /dev/$devicePartition
 	fi
 done
 
