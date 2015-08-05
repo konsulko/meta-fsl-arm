@@ -7,7 +7,7 @@ if [ ! -f $configFile ]; then
 	exit 1
 fi
 
-while true; do gst-play-1.0 --audiosink="pulsesink" --videosink=autodetect $configFile; done
+while true; do gst-play-1.0 --audiosink="alsasink" --videosink=autodetect $configFile; done
 
 
 exit 0
